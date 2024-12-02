@@ -272,3 +272,7 @@ synchronized(obj){
 乐观锁通常多用于写比较少的情况（多读场景，竞争较少），这样可以避免频繁加锁影响性能。不过，乐观锁主要针对的对象是单个共享变量（参考java.util.concurrent.atomic包下面的原子变量类）。
 
 ## 使用Redis分布式锁解决了在集群模式下一人一单的线程安全问题
+
+基于Redis中的SETNX实现分布式锁(还能通过MySQL，Zookeeper)
+![image](https://github.com/user-attachments/assets/10707a5e-26b4-4c22-a2ca-0e3e6236a69e)
+
