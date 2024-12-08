@@ -274,6 +274,230 @@ synchronized(obj){
 
 ## 使用Redis分布式锁解决了在集群模式下一人一单的线程安全问题
 
-基于Redis中的SETNX实现分布式锁(还能通过MySQL，Zookeeper)
-![image](https://github.com/user-attachments/assets/10707a5e-26b4-4c22-a2ca-0e3e6236a69e)
+**Redis分布式锁实现思路？**
+利用Redis中的set nx ex 获取锁，并设置过期时间，保存线程标识(还能通过MySQL，Zookeeper)
+![image](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/10707a5e-26b4-4c22-a2ca-0e3e6236a69e)
+
+**该分布式锁的特性有哪些？**
+
+1. 利用set nx满足互斥性
+2. 利用set ex保证故障时锁依然能释放，避免死锁，提高安全性
+3. 利用Redis集群保证高可用和高并发特性
+
+**怎么解决分布式锁的误删问题？**
+
+<img src="https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241204225254992.png" alt="image-20241204225254992" style="zoom: 67%;" />
+
+获取锁时获取线程标识
+
+```java
+  private static final String ID_PREFIX= UUID.randomUUID().toString(true)+"-";
+  //获取线程标识
+        String threadId = ID_PREFIX+Thread.currentThread().getId();
+```
+
+释放锁时先获取锁中的线程标识，判断是否与当前线程标识一致
+
+**如何保证分布式锁的原子性问题？**
+
+<img src="https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241204231420474.png" alt="image-20241204231420474" style="zoom:67%;" />
+ 线程1一个锁的持有者因为业务逻辑超时或者异常而释放锁，而此时线程2已经获取了锁，线程1可能会误删线程2的锁。
+
+```java
+//原代码有线程安全的漏洞
+@Override
+    public void delLock() {
+        //获取线程标识
+        String threadId = ID_PREFIX + Thread.currentThread().getId();
+        //获取锁中标识
+        String id = stringRedisTemplate.opsForValue().get(KEY_PREFIX + name);
+        if (threadId.equals(id)) {
+            //释放锁
+            stringRedisTemplate.delete(KEY_PREFIX + name);
+        }
+    }
+
+//lua脚本保证了一致性
+@Override
+    public void delLock() {
+        //调节lua脚本
+        stringRedisTemplate.execute(
+                UNLOCK_SCRIPT,
+                Collections.singletonList(KEY_PREFIX+name),
+                ID_PREFIX+Thread.currentThread().getId()
+        );
+    }
+```
+
+**基于setnx实现的分布式锁存在哪些问题？**
+
+基于 `SETNX` 实现的分布式锁适用于简单场景，但在高可靠性、高并发的生产环境中，建议使用更完善的分布式锁实现（如 Redisson）
+
+*不可重入：*
+
+问题: 同一个线程无法多次获取同一把锁。
+
+原因: 基于 `SETNX` 的实现不支持线程或进程的重入性。
+
+*不可重试：*
+
+问题: 如果获取锁失败，直接返回 `false`，没有重试机制。
+
+影响: 可能导致获取锁的线程因为一时竞争失败而放弃操作，增加了任务的失败可能性。
+
+*超时释放：*锁超时释放虽然可以避免死锁，但如果业务执行时间较长，锁可能在业务完成前被释放，导致其他线程错误地获取锁。
+
+*主从一致性问题：*在 Redis 主从集群模式下，如果主从同步存在延迟或主节点发生故障，从节点未同步最新的锁数据，可能导致锁的多实例争抢。
+
+**使用的什么分布式锁？**
+
+[另一篇文章详细了解Redisson](https://kneegcyao.github.io/2024/12/05/Redisson/)
+
+![image-20241207183707979](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241207183707979.png)
+
+## 基于stream结构作为消息队列,实现异步秒杀下单
+
+**为什么用异步秒杀?**
+
+进行秒杀操作时有很多操作都是要去操作数据库的，而且还是一个线程串行执行，这样就会导致我们的程序执行很慢，所以我们需要异步程序执行
+
+**怎么进行优化？**
+
+![image-20241207220614455](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241207220614455.png)
+
+我们将耗时较短的逻辑判断放到Redis中，例如：库存是否充足，是否一人一单这样的操作，只要满足这两条操作，那我们是一定可以下单成功的，不用等数据真的写进数据库，我们直接告诉用户下单成功就好了。然后后台再开一个线程，后台线程再去慢慢执行队列里的消息，这样我们就能很快的完成下单业务。
+
+![img](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/e342f782da8bd166aae355478e72fd06269fdcd127c7df90e342500ee9318476.jpg)
+
+- 当用户下单之后，判断库存是否充足，只需要取Redis中根据key找对应的value是否大于0即可，如果不充足，则直接结束。如果充足，则在Redis中判断用户是否可以下单，如果set集合中没有该用户的下单数据，则可以下单，并将userId和优惠券存入到Redis中，并且返回0，整个过程需要保证是原子性的，所以我们要用Lua来操作，同时由于我们需要在Redis中查询优惠券信息，所以在我们新增秒杀优惠券的同时，需要将优惠券信息保存到Redis中
+- 完成以上逻辑判断时，我们只需要判断当前Redis中的返回值是否为0，如果是0，则表示可以下单，将信息保存到queue中去，然后返回，开一个线程来异步下单，其阿奴单可以通过返回订单的id来判断是否下单成功
+
+**说说stream类型消息队列？**
+
+使用的是消费者组模式（`Consumer Group`）
+
+- 消费者组(Consumer Group)：将多个消费者划分到一个组中，监听同一个队列，具备以下特点
+  1. 消息分流
+     - 队列中的消息会分留给组内的不同消费者，而不是重复消费者，从而加快消息处理的速度
+  2. 消息标识
+     - 消费者会维护一个标识，记录最后一个被处理的消息，哪怕消费者宕机重启，还会从标识之后读取消息，确保每一个消息都会被消费
+  3. 消息确认
+     - 消费者获取消息后，消息处于pending状态，并存入一个pending-list，当处理完成后，需要通过XACK来确认消息，标记消息为已处理，才会从pending-list中移除
+
+*基本语法：*
+
+- 创建消费者组
+
+  ```java
+  XGROUP CREATE key groupName ID [MKSTREAM]
+  ```
+
+  - key: 队列名称
+  - groupName: 消费者组名称
+  - ID: 起始ID标识，$代表队列中的最后一个消息，0代表队列中的第一个消息
+  - MKSTREAM: 队列不存在时自动创建队列
+
+- 删除指定的消费者组
+
+  ```bash
+  XGROUP DESTORY key groupName
+  ```
+
+- 给指定的消费者组添加消费者
+
+  ```bash
+  XGROUP CREATECONSUMER key groupName consumerName
+  ```
+
+- 删除消费者组中指定的消费者
+
+  ```bash
+  XGROUP DELCONSUMER key groupName consumerName
+  ```
+
+- 从消费者组中读取消息
+
+  ```bash
+  XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [keys ...] ID [ID ...]
+  ```
+
+  - group: 消费者组名称
+  - consumer: 消费者名，如果消费者不存在，会自动创建一个消费者
+  - count: 本次查询的最大数量
+  - BLOCK milliseconds: 当前没有消息时的最大等待时间
+  - NOACK: 无需手动ACK，获取到消息后自动确认（一般不用，我们都是手动确认）
+  - STREAMS key: 指定队列名称
+  - ID: 获取消息的起始ID
+    - `>`：从下一个未消费的消息开始(pending-list中)
+    - 其他：根据指定id从pending-list中获取已消费但未确认的消息，例如0，是从pending-list中的第一个消息开始
+
+
+
+*基本思路：*
+
+```java
+while(true){
+    // 尝试监听队列，使用阻塞模式，最大等待时长为2000ms
+    Object msg = redis.call("XREADGROUP GROUP g1 c1 COUNT 1 BLOCK 2000 STREAMS s1 >")
+    if(msg == null){
+        // 没监听到消息，重试
+        continue;
+    }
+    try{
+        //处理消息，完成后要手动确认ACK，ACK代码在handleMessage中编写
+        handleMessage(msg);
+    } catch(Exception e){
+        while(true){
+            //0表示从pending-list中的第一个消息开始，如果前面都ACK了，那么这里就不会监听到消息
+            Object msg = redis.call("XREADGROUP GROUP g1 c1 COUNT 1 STREAMS s1 0");
+            if(msg == null){
+                //null表示没有异常消息，所有消息均已确认，结束循环
+                break;
+            }
+            try{
+                //说明有异常消息，再次处理
+                handleMessage(msg);
+            } catch(Exception e){
+                //再次出现异常，记录日志，继续循环
+                log.error("..");
+                continue;
+            }
+        }
+    }
+}
+```
+
+**XREADGROUP命令的特点？**
+
+1. 消息可回溯
+2. 可以多消费者争抢消息，加快消费速度
+3. 可以阻塞读取
+4. 没有消息漏读风险
+5. 有消息确认机制，保证消息至少被消费一次
+
+
+
+## 使用Redis的 ZSet 数据结构实现了点赞排行榜功能,使用Set 集合实现关注、共同关注功能
+
+**什么是ZSet?**
+
+Zset，即有序集合（Sorted Set），是 Redis 提供的一种复杂数据类型。Zset 是 set 的升级版，它在 set 的基础上增加了一个权重参数 score，使得集合中的元素能够按 score 进行有序排列。
+
+在 Zset 中，集合元素的添加、删除和查找的时间复杂度都是 O(1)。这得益于 Redis 使用的是一种叫做跳跃列表（skiplist）的数据结构来实现 Zset。
+
+**为什么使用ZSet数据结构？**
+
+一人只能点一次赞，对于点赞这种高频变化的数据，如果我们使用MySQL是十分不理智的，因为MySQL慢、并且并发请求MySQL会影响其它重要业务，容易影响整个系统的性能，继而降低了用户体验。
+
+![image-20241208154509134](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241208154509134.png)
+
+Zset 的主要特性包括：
+
+1.  唯一性：和 set 类型一样，Zset 中的元素也是唯一的，也就是说，同一个元素在同一个 Zset 中只能出现一次。 
+2.  排序：Zset 中的元素是有序的，它们按照 score 的值从小到大排列。如果多个元素有相同的 score，那么它们会按照字典序进行排序。 
+3.  自动更新排序：当你修改 Zset 中的元素的 score 值时，元素的位置会自动按新的 score 值进行调整。
+
+
+
+
 
