@@ -451,7 +451,6 @@ while(true){
     }
 }
 ```
-
 **XREADGROUP命令的特点？**
 
 1. 消息可回溯
@@ -460,6 +459,228 @@ while(true){
 4. 没有消息漏读风险
 5. 有消息确认机制，保证消息至少被消费一次
 
+---
+**✅改进：** 使用RabbitMQ更适合。相关面试题可以看这个[相关文章](https://kneegcyao.github.io/posts/93c6a719.html);
+
+**1.在`application.yml`中配置RabbitMQ**
+
+```yaml
+  spring:
+    rabbitmq:
+      host: localhost
+      port: 5672
+      username: guest
+      password: guest
+```
+
+- **2. 声明队列和交换机**
+  - **正常队列和交换机的绑定：**
+     commonExchange ("Common") → 使用路由键 "CQ" 绑定到 queueC ("CQ")。
+  - **死信队列和交换机的绑定：**
+     deadLetterExchange ("Dead-letter") → 使用路由键 "DLQ" 绑定到 deadLetterQueueD ("DLQ")。
+  - **普通队列到死信交换机的关系（死信机制）：**
+     queueC ("CQ") 配置了：
+    - 死信交换机为 **Dead-letter**；
+    - 死信路由键为 **"DLQ"**；
+    - TTL 为 10 秒。
+  - 当 **queueC** 中的消息超过 TTL 或触发其它死信条件后，这些消息将被自动发送到 **deadLetterExchange**，再由 **deadLetterExchange** 根据 **"DLQ"** 路由键路由到 **deadLetterQueueD**。
+
+```java
+@Configuration
+public class QueueConfig {
+
+    // 普通交换机名称
+    public static final String COMMON_EXCHANGE = "Common";
+    // 死信交换机名称
+    public static final String DEAD_DEAD_LETTER_EXCHANGE = "Dead-letter";
+    // 普通队列名称
+    public static final String QUEUE_C = "CQ";
+    // 死信队列名称
+    public static final String DEAD_LETTER_QUEUE_D = "DLQ";
+
+    /**
+     * 声明普通交换机
+     * 
+     * @return DirectExchange
+     */
+    @Bean("commonExchange")
+    public DirectExchange commonExchange(){
+        return new DirectExchange(COMMON_EXCHANGE);
+    }
+
+    /**
+     * 声明死信交换机
+     * 
+     * @return DirectExchange
+     */
+    @Bean("deadLetterExchange")
+    public DirectExchange deadLetterExchange(){
+        return new DirectExchange(DEAD_DEAD_LETTER_EXCHANGE);
+    }
+
+    /**
+     * 声明普通队列C, 并绑定死信交换机及设置消息TTL
+     * 
+     * 设置说明：
+     * - x-dead-letter-exchange: 配置消息过期后转发的死信交换机名称
+     * - x-dead-letter-routing-key: 配置转发到死信交换机时使用的路由键，此处与死信队列绑定时的路由键一致（"DLQ"）
+     * - x-message-ttl: 消息存活时间（此处设置为10000毫秒，即10秒）
+     *
+     * @return Queue
+     */
+    @Bean("queueC")
+    public Queue queueC(){
+        HashMap<String, Object> arguments = new HashMap<>();
+        // 消息在队列中存活10秒后失效，进入死信队列
+        arguments.put("x-message-ttl", 10000);
+        // 配置死信交换机
+        arguments.put("x-dead-letter-exchange", DEAD_DEAD_LETTER_EXCHANGE);
+        // 配置死信路由键，绑定到死信队列时使用
+        arguments.put("x-dead-letter-routing-key", "DLQ");
+
+        return QueueBuilder.durable(QUEUE_C)
+                           .withArguments(arguments)
+                           .build();
+    }
+
+    /**
+     * 声明死信队列D
+     * 
+     * @return Queue
+     */
+    @Bean("deadLetterQueueD")
+    public Queue deadLetterQueueD(){
+        return QueueBuilder.durable(DEAD_LETTER_QUEUE_D)
+                           .build();
+    }
+
+    /**
+     * 普通队列C与普通交换机Common绑定
+     *
+     * 当消息发送到交换机Common，并使用路由键 "CQ" 时，
+     * 消息将被路由到队列CQ。
+     *
+     * @param queueC 普通队列
+     * @param commonExchange 普通交换机
+     * @return Binding
+     */
+    @Bean
+    public Binding bindingQueueCToCommonExchange(@Qualifier("queueC") Queue queueC,
+                                                 @Qualifier("commonExchange") DirectExchange commonExchange) {
+        return BindingBuilder.bind(queueC).to(commonExchange).with("CQ");
+    }
+
+    /**
+     * 死信队列D与死信交换机Dead-letter绑定
+     *
+     * 当普通队列CQ中的消息由于TTL过期或其他原因被转为死信后，
+     * 消息会转发到死信交换机Dead-letter，并使用路由键 "DLQ"，
+     * 从而被路由到死信队列DLQ。
+     *
+     * @param deadLetterQueueD 死信队列
+     * @param deadLetterExchange 死信交换机
+     * @return Binding
+     */
+    @Bean
+    public Binding bindingDeadLetterQueueDToDeadLetterExchange(@Qualifier("deadLetterQueueD") Queue deadLetterQueueD,
+                                                               @Qualifier("deadLetterExchange") DirectExchange deadLetterExchange) {
+        return BindingBuilder.bind(deadLetterQueueD).to(deadLetterExchange).with("DLQ");
+    }
+}
+
+```
+
+**3.发送者**
+
+```java
+       VoucherOrder order = new VoucherOrder();
+        order.setId(orderId);
+        order.setUserId(userId);
+        order.setVoucherId(voucherId);
+        // 你可以用 JSON，也可以用序列化
+        // 增加消息发送的异常处理
+        //放入mq
+        String jsonStr = JSONUtil.toJsonStr(order);
+        try {
+            rabbitTemplate.convertAndSend("Common","CQ",jsonStr );
+        } catch (Exception e) {
+            log.error("发送 RabbitMQ 消息失败，订单ID: {}", orderId, e);
+            throw new RuntimeException("发送消息失败");
+        }
+        // 3. 返回订单号给前端（实际下单异步处理）
+        return Result.ok(orderId);
+    }
+```
+
+**4.接受者**
+
+```java
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class SeckillVoucherListener {
+
+    @Resource
+    SeckillVoucherServiceImpl seckillVoucherService;
+    
+    @Resource
+    VoucherOrderServiceImpl voucherOrderService;
+
+    /**
+     * 普通队列消费者：监听队列 "CQ"
+     *
+     * 消息从普通队列 "CQ" 进入后进行转换处理，保存订单，同时数据库秒杀库存减一
+     *
+     * @param message RabbitMQ消息
+     * @param channel 消息通道
+     * @throws Exception 异常处理
+     */
+    @RabbitListener(queues = "CQ")
+    public void receivedC(Message message, Channel channel) throws Exception {
+        String msg = new String(message.getBody());
+        log.info("普通队列:");
+        VoucherOrder voucherOrder = JSONUtil.toBean(msg, VoucherOrder.class);
+        log.info(voucherOrder.toString());
+        voucherOrderService.save(voucherOrder);  // 保存订单到数据库
+
+        // 秒杀业务：库存减一操作
+        Long voucherId = voucherOrder.getVoucherId();
+        seckillVoucherService.update()
+                .setSql("stock = stock - 1") // set stock = stock - 1
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0)             // where voucher_id = ? and stock > 0
+                .update();
+    }
+
+    /**
+     * 死信队列消费者：监听队列 "DLQ"
+     *
+     * 消息从死信队列 "DLQ" 进入后进行相同的处理，
+     * 适用于消息因过期或其它原因进入死信队列时的处理逻辑
+     *
+     * @param message RabbitMQ消息
+     * @throws Exception 异常处理
+     */
+    @RabbitListener(queues = "DLQ")
+    public void receivedDLQ(Message message) throws Exception {
+        log.info("死信队列:");
+        String msg = new String(message.getBody());
+        VoucherOrder voucherOrder = JSONUtil.toBean(msg, VoucherOrder.class);
+        log.info(voucherOrder.toString());
+        voucherOrderService.save(voucherOrder);  // 保存订单到数据库
+
+        // 秒杀业务：库存减一操作
+        Long voucherId = voucherOrder.getVoucherId();
+        seckillVoucherService.update()
+                .setSql("stock = stock - 1") // set stock = stock - 1
+                .eq("voucher_id", voucherId)
+                .gt("stock", 0)             // where voucher_id = ? and stock > 0
+                .update();
+    }
+}
+
+```
+---
 
 
 ## 使用Redis的 ZSet 数据结构实现了点赞排行榜功能,使用Set 集合实现关注、共同关注功能
