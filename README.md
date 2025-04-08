@@ -1,9 +1,11 @@
 # 简历上展示黑马点评
-[本文博客](https://kneegcyao.github.io/posts/bbf9fa63.html)
 
 ## 项目描述
+
 黑马点评项目是一个springboot开发的前后端分离项目，使用了redis集群、tomcat集群、MySQL集群提高服务性能。类似于大众点评，实现了短信登录、商户查询缓存、优惠卷秒杀、附近的商户、UV统计、用户签到、好友关注、达人探店  八个部分形成了闭环。其中重点使用了分布式锁实现了一人一单功能、项目中大量使用了Redis 的知识。
+
 ## 所用技术
+
 *SpringBoot+nginx+MySql+Lombok+MyBatis-Plus+Hutool+Redis*
 
 使用 Redis 解决了在集群模式下的 Session共享问题,使用拦截器实现用户的登录校验和权限刷新
@@ -23,10 +25,12 @@
 # 黑马定评项目 亮点难点
 
 ## 使用Redis解决了在集群模式下的Session共享问题，使用拦截器实现了用户的登录校验和权限刷新
+
 **为什么用Redis替代Session？**
 
-Session共享问题：多台Tomct并不共享session存储空间，当请求切换到不同tomcat服务时导致数据丢失的问题。
-解决方法：Session持久化到Redis，所有服务器实例都从 Redis 中读取和写入 Session 数据，保证一致性。 
+使用Session时，根据客户端发送的session-id获取Session，再从Session获取数据，由于Session共享问题：多台Tomct并不共享session存储空间，当请求切换到不同tomcat服务时导致数据丢失的问题。
+
+解决方法：用Redis代替Session存储User信息，注册用户时，会生成一个随机的Token作为Key值存放用户到Redis中。 
 
 **还有其他解决方法吗？**
 
@@ -34,15 +38,26 @@ Session共享问题：多台Tomct并不共享session存储空间，当请求切�
 Token 包含用户的认证信息（如用户 ID、权限等），并通过签名验证其完整性和真实性。
 每次请求，客户端将 Token 放在 Cookie 或 HTTP 头中发送到服务
 
+**说说你的登录流程？**
+
+![image-20250307131627121](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20250307131627121.png)
+
+使用Redis代替session作为缓存，使用Token作为唯一的key值
+
 **怎么使用拦截器实现这些功能？**
 
-![image](https://github.com/user-attachments/assets/6d797ae4-a802-4736-a786-6fa80bb69aa8)
+![image](https://github.com/user-attachments/assets/b9f35ed2-58fb-4e41-90b0-0d4ab00c5278)
+
 
 系统中设置了两层拦截器：
 
 第一层拦截器是做全局处理，例如获取Token，查询Redis中的用户信息，刷新Token有效期等通用操作。
 
 第二层拦截器专注于验证用户登录的逻辑，如果路径需要登录，但用户未登录，则直接拦截请求。
+
+**使用两层的原因？**
+
+使用拦截器是因为，多个线程都需要获取用户，在想要方法之前统一做些操作，就需要用拦截器，还可以拦截没用登录的用户，但只有一层拦截器不是拦截所有请求，所有有些请求不会刷新Token时间，我们就需要再加一层拦截器，拦截所有请求，做到一直刷新。
 
 *好处：*
 
@@ -58,13 +73,7 @@ Token 包含用户的认证信息（如用户 ID、权限等），并通过签�
 
 **怎么保证缓存更新策略的高一致性需求？**
 
-*读操作*
-·缓存命中直接返回
-·缓存未命中则查询数据库，并写入缓存，设定超时时间
-
-*写操作*
-·先写数据库，然后再删除缓存
-·要确保数据库与缓存操作的原子性
+我们使用的时Redisson实现的读写锁，再读的时候添加共享锁，可以保证读读不互斥，读写互斥。我们更新数据的时候，添加排他锁，他是读写，读读都互斥，这样就能保证在写数据的同时，是不会让其他线程读数据的，避免了脏数据。读方法和写方法是同一把锁。
 
 ## 使用 Redis 对高频访问的信息进行缓存，降低了数据库查询的压力,解决了缓存穿透、雪崩、击穿问题
 
@@ -98,12 +107,11 @@ eg:字段id是长整型，如果发来的不是长整型则直接返回
 但是要注意：如果缓存了空值或特殊值要设置一个短暂的过期时间。
 
 **什么是缓存雪崩，怎么解决？**
-
-![image](https://github.com/user-attachments/assets/9821c8ec-bd6f-44e9-8ffd-3c796453125c)
+![image](https://github.com/user-attachments/assets/758bf96d-af23-4d89-91de-71f96c001be6)
 
 
  *定义：* 缓存雪崩是缓存中大量key失效后当高并发到来时导致大量请求到数据库，瞬间耗尽数据库资源，导致数据库无法使用。
- 
+
 造成缓存雪崩问题的原因是是大量key拥有了相同的过期时间，比如对课程信息设置缓存过期时间为10分钟，在大量请求同时查询大量的课程信息时，此时就会有大量的课程存在相同的过期时间，一旦失效将同时失效，造成雪崩问题。
 
 *解决方法：*
@@ -111,6 +119,7 @@ eg:字段id是长整型，如果发来的不是长整型则直接返回
 1、使用同步锁控制查询数据库的线程
 
 使用同步锁控制查询数据库的线程，只允许有一个线程去查询数据库，查询得到数据后存入缓存。
+
 ```java
 synchronized(obj){
   //查询数据库
@@ -133,7 +142,8 @@ synchronized(obj){
 
 **什么是缓存击穿，怎么解决？**
 
-![image](https://github.com/user-attachments/assets/46576344-da8e-4ba2-8ead-f75c5733c539)
+![image](https://github.com/user-attachments/assets/ae5f4706-29ac-4d18-9816-4f7f4e3660f1)
+
 
 *定义：* 缓存击穿是指大量并发访问同一个热点数据，当热点数据失效后同时去请求数据库，瞬间耗尽数据库资源，导致数据库无法使用。
 比如某手机新品发布，当缓存失效时有大量并发到来导致同时去访问数据库。
@@ -142,7 +152,8 @@ synchronized(obj){
 
 1.基于互斥锁解决
 
-![image](https://github.com/user-attachments/assets/57780e51-17e1-458a-ac27-eb15c985ff6a)
+![image](https://github.com/user-attachments/assets/6c70bc97-3ebd-4b64-a43b-a2cf8c0564fb)
+
 
 
 互斥锁（时间换空间）
@@ -193,7 +204,7 @@ synchronized(obj){
 重建缓存的任务交由后台线程执行，提高用户体验。
 
 2. 减少数据库压力
-   
+
 缓存击穿问题： 当热点数据过期时，多个线程同时访问数据库，可能导致数据库压力骤增，甚至崩溃。
 
 子线程异步重建缓存：
@@ -202,7 +213,7 @@ synchronized(obj){
 即便在缓存击穿的情况下，也不会对数据库造成过大的负载。
 
 3. 提高系统吞吐量
-   
+
 同步更新的瓶颈： 如果所有线程都等待缓存更新完成，系统吞吐量会因阻塞而降低。
 
 异步重建的优化：
@@ -212,7 +223,7 @@ synchronized(obj){
 数据更新操作与用户请求分离，减少了阻塞等待。
 
 4. 减少热点数据竞争
-   
+
 高并发场景下的竞争： 热点数据被大量请求时，多个线程可能同时触发缓存更新逻辑，产生资源竞争。
 
 单子线程更新的效果：
@@ -222,7 +233,7 @@ synchronized(obj){
 配合分布式锁机制，可以有效减少竞争开销。
 
 5. 提升系统的稳定性
-   
+
 数据库保护：
 
 异步更新缓存，减缓数据库的瞬时高并发压力。
@@ -256,12 +267,14 @@ synchronized(obj){
       优点：简单粗暴
       缺点：性能一般
 ```
+
 ```
 乐观锁：不加锁，再更新时判断是否有其他线程在修改
 
       优点：性能好
       缺点：存在成功率低的问题(该项目在超卖问题中，不在需要判断数据查询时前后是否一致，直接判读库存>0;有的项目里不是库存，只能判断数据有没有变化时，还可以用分段锁，将数据分到10个表，同时十个去抢)
 ```
+
 **说一下乐观锁和悲观锁？**
 
 悲观锁：悲观锁总是假设最坏的情况，认为共享资源每次被访问的时候就会出现问题(比如共享数据被修改)，所以每次在获取资源操作的时候都会上锁，这样其他线程想拿到这个资源就会阻塞直到锁被上一个持有者释放。也就是说，共享资源每次只给一个线程使用，其它线程阻塞，用完后再把资源转让给其它线程。
@@ -272,84 +285,52 @@ synchronized(obj){
 
 乐观锁通常多用于写比较少的情况（多读场景，竞争较少），这样可以避免频繁加锁影响性能。不过，乐观锁主要针对的对象是单个共享变量（参考java.util.concurrent.atomic包下面的原子变量类）。
 
+**你使用的什么？**
+
+使用的是乐观锁CAS算法。CAS是一个原子操作，底层依赖于一条CPU的原子指令。
+
+设计三个参数：
+
+- V:要更新的变量值
+- E：预期值
+- N：拟入的新值
+
+当且仅当V的值等于E时，CAS通过原子方式用新值N来更新V的值。如果不等，说明已经有其他线程更新了V，则当前线程放弃更新。
+
+<img src="https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20250307150305076.png" alt="image-20250307150305076" style="zoom: 33%;" />
+
+从业务的角度看，只要库存数还有，就能执行这个操作，所以where条件设置为stock>0
+
+![image-20250307150937348](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20250307150937348.png)
+
 ## 使用Redis分布式锁解决了在集群模式下一人一单的线程安全问题
 
+为了防止批量刷券，添加逻辑：根据优惠券id和用户id查询订单，如果不存在，则创建。
+
+在集群模式下，加锁只是对该JVM给当前这台服务器的请求的加锁，而集群是多台服务器，所以要使用分布式锁，满足集群模式下多进程可见并且互斥的锁。
+
 **Redis分布式锁实现思路？**
-利用Redis中的set nx ex 获取锁，并设置过期时间，保存线程标识(还能通过MySQL，Zookeeper)
-![image](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/10707a5e-26b4-4c22-a2ca-0e3e6236a69e)
+我使用的Redisson分布式锁，他能做到可重入，可重试
 
-**该分布式锁的特性有哪些？**
+*可重入*:同一线程可以多次获取同一把锁，可以避免死锁，用hash结构存储。
 
-1. 利用set nx满足互斥性
-2. 利用set ex保证故障时锁依然能释放，避免死锁，提高安全性
-3. 利用Redis集群保证高可用和高并发特性
+​           大key是根据业务设置的，小key是线程唯一标识，value值是当前重入次数。
 
-**怎么解决分布式锁的误删问题？**
+<img src="https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241205233234744.png" alt="image-20241205233234744" style="zoom: 50%;" />
 
-<img src="https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241204225254992.png" alt="image-20241204225254992" style="zoom: 67%;" />
+*可重试*：Redisson手动加锁，可以控制锁的失效时间和等待时间，当锁住的一个业务并没有执行完成的时候，Redisson会引入一个Watch Dog看门狗机制。就是说，每隔一段时间就检查当前事务是否还持有锁。如果持有，就增加锁的持有时间。当业务执行完成之后，需要使用释放锁就可以了。还有个好处就是，在`高并发`下，一个业务有可能会执行很快。客户1持有锁的时候，客户2来了以后并不会马上拒绝，他会自旋不断尝试获取锁。如果客户1释放之后，客户2可以立马持有锁，性能也能得到提升。
 
-获取锁时获取线程标识
 
-```java
-  private static final String ID_PREFIX= UUID.randomUUID().toString(true)+"-";
-  //获取线程标识
-        String threadId = ID_PREFIX+Thread.currentThread().getId();
-```
 
-释放锁时先获取锁中的线程标识，判断是否与当前线程标识一致
 
-**如何保证分布式锁的原子性问题？**
 
-<img src="https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241204231420474.png" alt="image-20241204231420474" style="zoom:67%;" />
- 线程1一个锁的持有者因为业务逻辑超时或者异常而释放锁，而此时线程2已经获取了锁，线程1可能会误删线程2的锁。
+![](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20250307153056365.png)
 
-```java
-//原代码有线程安全的漏洞
-@Override
-    public void delLock() {
-        //获取线程标识
-        String threadId = ID_PREFIX + Thread.currentThread().getId();
-        //获取锁中标识
-        String id = stringRedisTemplate.opsForValue().get(KEY_PREFIX + name);
-        if (threadId.equals(id)) {
-            //释放锁
-            stringRedisTemplate.delete(KEY_PREFIX + name);
-        }
-    }
+*主从一致性*：连锁(multiLock)-不再有主从节点，都获取成功才能获取锁成功，有一个节点获取锁不成功就获取锁失败
 
-//lua脚本保证了一致性
-@Override
-    public void delLock() {
-        //调节lua脚本
-        stringRedisTemplate.execute(
-                UNLOCK_SCRIPT,
-                Collections.singletonList(KEY_PREFIX+name),
-                ID_PREFIX+Thread.currentThread().getId()
-        );
-    }
-```
+一个宕机了，还有两个节点存活，锁依旧有效，可用性随节点增多而增强。如果想让可用性更强，也可以给多个节点建立主从关系，做主从同步，但不会有主从一致问题，当新线程来新的主节点获取锁，由于另外两个主节点依然有锁，不会出现锁失效问题吗，所以不会获取成功。
 
-**基于setnx实现的分布式锁存在哪些问题？**
-
-基于 `SETNX` 实现的分布式锁适用于简单场景，但在高可靠性、高并发的生产环境中，建议使用更完善的分布式锁实现（如 Redisson）
-
-*不可重入：*
-
-问题: 同一个线程无法多次获取同一把锁。
-
-原因: 基于 `SETNX` 的实现不支持线程或进程的重入性。
-
-*不可重试：*
-
-问题: 如果获取锁失败，直接返回 `false`，没有重试机制。
-
-影响: 可能导致获取锁的线程因为一时竞争失败而放弃操作，增加了任务的失败可能性。
-
-*超时释放：*锁超时释放虽然可以避免死锁，但如果业务执行时间较长，锁可能在业务完成前被释放，导致其他线程错误地获取锁。
-
-*主从一致性问题：*在 Redis 主从集群模式下，如果主从同步存在延迟或主节点发生故障，从节点未同步最新的锁数据，可能导致锁的多实例争抢。
-
-**使用的什么分布式锁？**
+![image-20250307153809096](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20250307153809096.png)
 
 [另一篇文章详细了解Redisson](https://kneegcyao.github.io/2024/12/05/Redisson/)
 
@@ -359,13 +340,17 @@ synchronized(obj){
 
 **为什么用异步秒杀?**
 
-进行秒杀操作时有很多操作都是要去操作数据库的，而且还是一个线程串行执行，这样就会导致我们的程序执行很慢，所以我们需要异步程序执行
+![image-20250307160040968](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20250307160040968.png)
+
+我们用jmeter测试，发现高并发下异常率高，吞吐量低，平均耗时高
+
+整个业务流程是串行执行的，查询优惠券，查询订单，减库存，创建订单这四步都是走的数据库，mysql本身并发能力就较少，还有读写操作，还加了分布式锁，整个业务耗时长，并发能力弱。
 
 **怎么进行优化？**
 
 ![image-20241207220614455](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20241207220614455.png)
 
-我们将耗时较短的逻辑判断放到Redis中，例如：库存是否充足，是否一人一单这样的操作，只要满足这两条操作，那我们是一定可以下单成功的，不用等数据真的写进数据库，我们直接告诉用户下单成功就好了。然后后台再开一个线程，后台线程再去慢慢执行队列里的消息，这样我们就能很快的完成下单业务。
+我们分成两个线程，我们将耗时较短的逻辑判断放到Redis中，例如：库存是否充足，是否一人一单这样的操作，只要满足这两条操作，那我们是一定可以下单成功的，不用等数据真的写进数据库，我们直接告诉用户下单成功就好了，将信息引入异步队列记录相关信息，然后后台再开一个线程，后台线程再去慢慢执行队列里的消息，这样我们就能很快的完成下单业务。
 
 ![img](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/e342f782da8bd166aae355478e72fd06269fdcd127c7df90e342500ee9318476.jpg)
 
@@ -499,5 +484,101 @@ Zset 的主要特性包括：
 
 
 
+**点赞**
+
+用ZSet中的add方法增添，时间戳作为score（zadd key value score)
+
+用ZSet中的score方法，来判断是否存在
+
+```java
+ @Override
+    public Result updateLike(Long id){
+        //1.获取当前用户
+        Long userId = UserHolder.getUser().getId();
+        //2.判断当前用户有没有点赞
+        String key=BLOG_LIKED_KEY+id;
+        Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
+        if(score==null) {
+            //3.如果未点赞，可以点赞
+            //3.1.数据库点赞数+1
+            boolean isSuccess = update().setSql("liked=liked+1").eq("id", id).update();
+            //3.2.保存用户到redis的set集合  zadd key value score
+            if(isSuccess){
+                stringRedisTemplate.opsForZSet().add(key,userId.toString(),System.currentTimeMillis());
+            }
+        }else {
+            //4.如果已经点赞，取消点赞
+            //4.1.数据库点赞数-1
+            boolean isSuccess = update().setSql("liked=liked-1").eq("id", id).update();
+            if(isSuccess) {
+                //4.2.将用户从set集合中移除
+                stringRedisTemplate.opsForZSet().remove(key,userId.toString());
+            }
+        }
+        return Result.ok();
+    }
+```
+
+**共同关注**
+
+通过Set中的intersect方法求两个key的交集
+
+```java
+ @Override
+    public Result follow(Long followUserId, Boolean isFollow) {
+        //获取登录用户
+        Long userId = UserHolder.getUser().getId();
+        String key = "follows:" + userId;
+        //1.判断关注还是取关
+        if(isFollow) {
+            //2.关注
+            Follow follow = new Follow();
+            follow.setFollowUserId(followUserId);
+            follow.setUserId(userId);
+            boolean isSuccess = save(follow);
+            if(isSuccess){
+                //把关注用户的id，放入redis的set集合 sadd userId followUserId
+                stringRedisTemplate.opsForSet().add(key,followUserId.toString());
+            }
+        }else {
+            //3.取关
+            boolean isSuccess = remove(new QueryWrapper<Follow>()
+                    .eq("user_id", userId)
+                    .eq("follow_user_id", followUserId));
+            //移除
+            if(isSuccess){
+                stringRedisTemplate.opsForSet().remove(key,followUserId.toString());
+            }
+        }
+        return Result.ok();
+    }
+
+```
 
 
+
+```java
+@Override
+    public Result followCommons(Long id) {
+        //获取当前用户
+        Long userId = UserHolder.getUser().getId();
+        String key = "follows:" + userId;
+        //求交集
+        String key2 = "follows:" + id;
+        Set<String> intersect = stringRedisTemplate.opsForSet().intersect(key, key2);
+        if(intersect==null||intersect.isEmpty()){
+            return Result.ok(Collections.emptyList());
+        }
+        //解析出id
+        List<Long> ids = intersect.stream().map(Long::valueOf).collect(Collectors.toList());
+
+        //查询用户
+        List<UserDTO> userDTOS = userService
+                .listByIds(ids).stream()
+                .map(user -> BeanUtil.copyProperties(user, UserDTO.class))
+                .collect(Collectors.toList());
+
+        return Result.ok(userDTOS);
+
+    }
+```
