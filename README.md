@@ -803,3 +803,375 @@ Zset 的主要特性包括：
 
     }
 ```
+## 附近商铺搜索
+
+我使用的是Redis的GEO数据结构，来存储商户地理座标
+
+**GEO数据结构简介**
+
+- **Redis GEO本质**：底层基于**Sorted Set（有序集合）**实现，存储每个位置的经纬度信息，并支持快速范围查询。
+- **核心能力**：
+  - **添加位置**：存储商户ID及其经纬度。
+  - **计算距离**：获取两个位置间的距离。
+  - **范围搜索**：查找某中心点半径范围内的所有商户。
+  - **排序**：按距离升序或降序返回结果。
+
+**基本操作**
+
+**1. GEOADD：添加地理位置**
+
+**作用**：将经纬度与成员（如商户ID）关联，存储到GEO集合中。
+**语法**：
+
+```bash
+GEOADD key 经度1 纬度1 成员1 [经度2 纬度2 成员2 ...]
+```
+
+```bash
+GEOADD shops:geo 116.397128 39.916527 "shop:1001" 116.405285 39.904987 "shop:1002"
+```
+
+**说明**：
+
+- 经纬度范围为：经度（-180 到 180），纬度（-85.05112878 到 85.05112878）。
+- 若成员已存在，会更新其经纬度。
+- 返回值为成功添加的成员数量（忽略重复成员的更新）。
+
+---
+
+**2. GEOPOS：获取成员坐标**
+
+**作用**：查询指定成员的经纬度。
+**语法**：
+
+```bash
+GEOPOS key 成员1 [成员2 ...]
+```
+
+**示例**：
+
+```bash
+GEOPOS shops:geo "shop:1001"
+```
+
+**输出**：
+
+```bash
+1) 1) "116.39712721109390259"    # 经度
+   2) "39.91652652951830512"     # 纬度
+```
+
+**说明**：
+
+- 若成员不存在，返回`nil`。
+- 返回值为数组格式，顺序与查询成员一致。
+
+---
+
+**3. GEODIST：计算两个成员间的距离**
+
+**作用**：返回两个地理位置之间的距离。
+**语法**：
+
+```bash
+GEODIST key 成员1 成员2 [单位]
+```
+
+**单位参数**：
+
+- `m`（米，默认）、`km`（千米）、`mi`（英里）、`ft`（英尺）。
+
+  **示例**：
+
+```bash
+GEODIST shops:geo "shop:1001" "shop:1002" km
+```
+
+**输出**：
+
+```bash
+"1.6423"  # 单位：千米
+```
+
+**说明**：
+
+- 若任一成员不存在，返回`nil`。
+- 使用Haversine公式计算球面距离，误差<0.5%。
+
+---
+
+**4. GEORADIUS：根据中心点搜索半径内的成员**
+
+**作用**：以指定经纬度为中心，搜索半径范围内的成员。
+**语法**：
+
+```bash
+GEORADIUS key 经度 纬度 半径 单位 [WITHDIST] [WITHCOORD] [ASC|DESC] [COUNT 数量]
+```
+
+**参数说明**：
+
+- `WITHDIST`：返回成员与中心点的距离。
+- `WITHCOORD`：返回成员的经纬度。
+- `ASC/DESC`：按距离升序/降序排序（默认升序）。
+- `COUNT`：限制返回结果数量。
+  **示例**：
+
+```bash
+GEORADIUS shops:geo 116.403847 39.915526 5 km WITHDIST ASC COUNT 10
+```
+
+**输出**：
+
+```bash
+1) 1) "shop:1001"             # 成员
+   2) "0.8521"                # 距离（单位：km）
+2) 1) "shop:1002"
+   2) "1.6423"
+```
+
+---
+
+**5. GEORADIUSBYMEMBER：根据成员位置搜索**
+
+**作用**：以某个成员的位置为中心，搜索半径范围内的其他成员。
+**语法**：
+
+```bash
+GEORADIUSBYMEMBER key 成员 半径 单位 [WITHDIST] [WITHCOORD] [ASC|DESC] [COUNT 数量]
+```
+
+**示例**：
+
+```bash
+GEORADIUSBYMEMBER shops:geo "shop:1001" 2 km WITHCOORD
+```
+
+**输出**：
+
+```bash
+1) 1) "shop:1001"             
+   2) "0.0000"                # 距离（自身）
+   3) 1) "116.39712721109390259" 
+      2) "39.91652652951830512"
+```
+
+
+
+## 用户签到
+
+基于Redis中的BitMap数据结构实现。
+
+- **BitMap概念**
+
+`Bitmap`，即位图，是一串连续的二进制数组（0和1），可以通过偏移量（offset）定位元素。BitMap通过最小的单位bit来进行`0|1`的设置，表示某个元素的值或者状态，时间复杂度为O(1)。我们将签到记录为1，为签到记录为0。
+
+由于 bit 是计算机中最小的单位，使用它进行储存将非常节省空间，特别适合一些数据量大且使用**二值统计的场景**。
+
+`Bitmap` 本身是用 `String` 类型作为底层数据结构实现的一种统计二值状态的数据类型。
+
+`String` 类型是会保存为二进制的字节数组，所以，Redis 就把字节数组的每个 bit 位利用起来，用来表示一个元素的二值状态，你可以把 `Bitmap` 看作是一个 bit 数组。
+
+<img src="https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/090cfd4226873a079b3c43d97eec8e69.png" alt="redis中bitmap的使用及场景，如何操作_redis bitmap-CSDN博客" style="zoom:50%;" />
+
+----
+
+- **基本命令**
+
+ **设置标记**
+
+即 setbit ，主要是指将某个索引，设置为1(设置0表示抹去标记)
+
+```java
+@Autowired
+private StringRedisTemplate redisTemplate;
+
+/**
+ * 设置标记位
+ *
+ * @param key
+ * @param offset
+ * @param tag
+ * @return
+ */
+public Boolean mark(String key, long offset, boolean tag) {
+    return redisTemplate.opsForValue().setBit(key, offset, tag);
+}
+}
+```
+
+ **判断存在与否**
+
+即 getbit key index ，如果返回1，表示存在否则不存在
+
+```java
+/**
+ * 判断是否标记过
+ *
+ * @param key
+ * @param offest
+ * @return
+ */
+public Boolean container(String key, long offest) {
+    return redisTemplate.opsForValue().getBit(key, offest);
+}
+```
+
+**计数**
+
+即 bitcount key ，统计和
+
+```java
+/**
+ * 统计计数
+ *
+ * @param key
+ * @return
+ */
+public long bitCount(String key) {
+    return redisTemplate.execute(new RedisCallback<Long>() {
+        @Override
+        public Long doInRedis(RedisConnection redisConnection) throws DataAccessException {
+            return redisConnection.bitCount(key.getBytes());
+        }
+    });
+}
+```
+
+项目中我创建了一个记录签到的表，实现签到接口，将当前用户当天签到信息保存到Redis中
+
+![image-20250418171823965](https://cdn.jsdelivr.net/gh/KNeegcyao/picdemo/img/image-20250418171823965.png)
+
+```java
+/**
+ * 用户签到
+ *
+ * @return
+ */
+public Result sign() {
+    // 1. 获取当前登录用户的ID（从ThreadLocal中获取用户信息，确保线程安全）
+    Long userId = ThreadLocalUtls.getUser().getId();
+    
+    // 2. 获取当前日期时间（使用系统默认时区）
+    LocalDateTime now = LocalDateTime.now();
+    
+    // 3. 拼接Redis键名：格式为 "sign:用户ID:年月"
+    //   示例：用户1001在2023年10月签到 → "sign:1001:202310"
+    String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+    String key = USER_SIGN_KEY + userId + keySuffix;
+    
+    // 4. 获取今天是本月的第几天（范围1~31）
+    int dayOfMonth = now.getDayOfMonth();
+    
+    // 5. 使用Redis位图记录签到（偏移量从0开始，故需-1）
+    stringRedisTemplate.opsForValue().setBit(key, dayOfMonth - 1, true);
+    
+    // 6. 返回操作成功结果
+    return Result.ok();
+}
+```
+
+```java
+/**
+ * 记录连续签到的天数
+ *
+ * @return
+ */
+@Override
+public Result signCount() {
+    // 1、获取签到记录
+    // 获取当前登录用户
+    Long userId = ThreadLocalUtls.getUser().getId();
+    // 获取日期
+    LocalDateTime now = LocalDateTime.now();
+    // 拼接key
+    String keySuffix = now.format(DateTimeFormatter.ofPattern(":yyyyMM"));
+    String key = USER_SIGN_KEY + userId + keySuffix;
+    // 获取今天是本月的第几天
+    int dayOfMonth = now.getDayOfMonth();
+    // 获取本月截止今天为止的所有的签到记录，返回的是一个十进制的数字 BITFIELD sign:5:202203 GET u14 0
+    List<Long> result = stringRedisTemplate.opsForValue().bitField(
+            key,
+            BitFieldSubCommands.create()
+                    .get(BitFieldSubCommands.BitFieldType.unsigned(dayOfMonth)).valueAt(0)
+    );
+    // 2、判断签到记录是否存在
+    if (result == null || result.isEmpty()) {
+        // 没有任何签到结果
+        return Result.ok(0);
+    }
+    // 3、获取本月的签到数（List<Long>是因为BitFieldSubCommands是一个子命令，可能存在多个返回结果，这里我们知识使用了Get，
+    // 可以明确只有一个返回结果，即为本月的签到数，所以这里就可以直接通过get(0)来获取）
+    Long num = result.get(0);
+    if (num == null || num == 0) {
+        // 二次判断签到结果是否存在，让代码更加健壮
+        return Result.ok(0);
+    }
+    // 4、循环遍历，获取连续签到的天数（从当前天起始）
+    int count = 0;
+    while (true) {
+        // 让这个数字与1做与运算，得到数字的最后一个bit位，并且判断这个bit位是否为0
+        if ((num & 1) == 0) {
+            // 如果为0，说明未签到，结束
+            break;
+        } else {
+            // 如果不为0，说明已签到，计数器+1
+            count++;
+        }
+        // 把数字右移一位，抛弃最后一个bit位，继续下一个bit位
+        num >>>= 1;
+    }
+    return Result.ok(count);
+}
+```
+
+
+
+## UV统计
+
+UV统计（Unique Visitor Statistics）是用于衡量网站、应用程序或其他在线服务中独立访客数量的关键指标。以下是关于UV统计的详细解析：
+
+**1. UV的定义**
+
+- **核心概念**：UV（Unique Visitor，独立访客）指在一定时间范围内（通常为一天），访问某网站或页面的不同用户数量。同一用户多次访问仅计为1次124。
+- **与PV的区别**：
+  - **PV（Page View，页面浏览量）**：统计用户每次访问页面的次数，多次刷新页面会累加14。
+  - **UV更关注用户身份的唯一性**，而PV反映页面热度
+
+**2.实现方法**
+
+使用**HyperLogLog(HLL)**数据结构
+
+- **原理**：基于概率算法，通过哈希函数估算集合基数（即唯一元素数量），无需存储完整用户数据，极大节省内存。
+- **Redis实现**：
+  - **内存占用**：单个HLL结构仅需≤16KB，误差率<0.81%，适合高并发场景。
+  - **命令示例**：
+    - `PFADD key user_id`：添加用户到HLL。
+    - `PFCOUNT key`：获取UV估算值
+
+**模拟用户数据**
+
+```java
+    /**
+     * 测试 HyperLogLog 实现 UV 统计的误差
+     */
+    @Test
+    public void testHyperLogLog() {
+        String[] values = new String[1000];
+        // 批量保存100w条用户记录，每一批1个记录
+        int j = 0;
+        for (int i = 0; i < 1000000; i++) {
+            j = i % 1000;
+            values[j] = "user_" + i;
+            if (j == 999) {
+                // 发送到Redis
+                stringRedisTemplate.opsForHyperLogLog().add("hl2", values);
+            }
+        }
+        // 统计数量
+        Long count = stringRedisTemplate.opsForHyperLogLog().size("hl2");
+        System.out.println("count = " + count);
+    }
+
+```
+
