@@ -22,8 +22,8 @@ import static com.hmdp.utils.RedisConstants.SECKILL_STOCK_KEY;
  *  服务实现类
  * </p>
  *
- * @author 虎哥
- * @since 2021-12-22
+ * @author llx
+ * @since 2025-10-20
  */
 @Service
 public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> implements IVoucherService {
@@ -53,7 +53,8 @@ public class VoucherServiceImpl extends ServiceImpl<VoucherMapper, Voucher> impl
         seckillVoucher.setBeginTime(voucher.getBeginTime());
         seckillVoucher.setEndTime(voucher.getEndTime());
         seckillVoucherService.save(seckillVoucher);
-        //保存秒杀得库存到redis
+        //将优惠券的库存保存到redis中，用于高并发下的库存扣减
+        //此时，Mysql的数据未变，待后期定时任务扣减库存
         stringRedisTemplate.opsForValue().set(SECKILL_STOCK_KEY +voucher.getId(),voucher.getStock().toString());
 
     }

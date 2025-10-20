@@ -13,8 +13,8 @@ import javax.annotation.Resource;
  *  前端控制器
  * </p>
  *
- * @author 虎哥
- * @since 2021-12-22
+ * @author llx
+ * @since 2025-10-20
  */
 @RestController
 @RequestMapping("/voucher")
@@ -36,6 +36,7 @@ public class VoucherController {
 
     /**
      * 新增秒杀券
+     * 同上
      * @param voucher 优惠券信息，包含秒杀信息
      * @return 优惠券id
      */
