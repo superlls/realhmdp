@@ -39,35 +39,6 @@ public class CacheClient {
         stringRedisTemplate.opsForValue().set(key,JSONUtil.toJsonStr(redisData));
     }
 
-    public <R,ID> R queryWithPassThrough(
-            String keyPrefix, ID id, Class<R> type, Function<ID,R> dbFallback,Long time,TimeUnit unit){
-        String key=keyPrefix+id;
-        //1.尝试从Redis查询商铺缓存
-        String json = stringRedisTemplate.opsForValue().get(key);
-        //2.判断缓存是否存在
-        if(StrUtil.isNotBlank(json)) { //判断字符串既不为null，也不是空字符串(""),且也不是空白字符
-            //3.存在，返回商铺信息
-            return JSONUtil.toBean(json, type);
-
-        }
-        //判断是否为空值
-        if(json!=null){
-            return null;
-        }
-        //4.不存在，根据id查询数据库
-        R r = dbFallback.apply(id);
-        //5.判断数据库中是否存在
-        if(r==null){
-            //6.不存在，返回错误状态码
-            stringRedisTemplate.opsForValue().set(key,"",RedisConstants.CACHE_NULL_TTL,TimeUnit.MINUTES);
-            return null;
-        }
-        //7.存在，写入redis，返回商铺信息
-       this.set(key,r,time,unit);
-
-        return r;
-
-    }
 
 
     private static final ExecutorService CACHE_REBUILD_EXECUTOR= Executors.newFixedThreadPool(10);

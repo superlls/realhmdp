@@ -16,8 +16,8 @@ import javax.annotation.Resource;
  * 前端控制器
  * </p>
  *
- * @author 虎哥
- * @since 2021-12-22
+ * @author llx
+ * @since 2025-10-20
  */
 @RestController
 @RequestMapping("/shop")
@@ -28,7 +28,6 @@ public class ShopController {
 
     /**
      * 根据id查询商铺信息
-     *
      * @param id 商铺id
      * @return 商铺详情数据
      */
