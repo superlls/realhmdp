@@ -9,8 +9,8 @@ import com.baomidou.mybatisplus.extension.service.IService;
  *  服务类
  * </p>
  *
- * @author 虎哥
- * @since 2021-12-22
+ * @author llx
+ * @since 2025-10-20
  */
 public interface IFollowService extends IService<Follow> {
 
