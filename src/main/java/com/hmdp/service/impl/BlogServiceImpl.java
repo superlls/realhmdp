@@ -193,13 +193,15 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
     }
 
     @Override
-    public Result  queryBlogById(Long id) {
+    public Result queryBlogById(Long id) {
         //1.查询blog
         Blog blog = getById(id);
-        //2.查询blog关联的对象
+
         if(blog==null){
             return Result.fail("博客不存在");
         }
+
+        //2.查询blog有关的用户
         queryBlogUser(blog);
         //3.查询blog是否点赞
         isBlogLiked(blog);
@@ -215,7 +217,11 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         }
         Long userId = user.getId();
 
-        //2.判断当前用户有没有点赞
+        // 2. 判断当前用户是否点赞：
+        //    查询 ZSet 中是否存在当前用户的 ID（member）。
+        //    如果返回值不为 null，说明用户已点赞。
+        //    score 存储的是点赞时间戳，但这里只用来判断是否存在。
+
         String key=BLOG_LIKED_KEY+blog.getId();
         Double score = stringRedisTemplate.opsForZSet().score(key, userId.toString());
         blog.setIsLike(score!=null);
