@@ -48,6 +48,7 @@ public class UploadController {
         // 获取后缀
         String suffix = StrUtil.subAfter(originalFilename, ".", true);
         // 生成目录
+        // TODO 亮点：位运算 通过哈希值生成目录 均匀分布
         String name = UUID.randomUUID().toString();
         int hash = name.hashCode();
         int d1 = hash & 0xF;
