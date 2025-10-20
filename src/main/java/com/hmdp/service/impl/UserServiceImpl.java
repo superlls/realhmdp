@@ -82,40 +82,36 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
     public Result login(LoginFormDTO loginForm, HttpSession session) {
         String code = loginForm.getCode();
         String phone = loginForm.getPhone();
-        //1.校验手机号
+        //校验手机号
         if(RegexUtils.isPhoneInvalid(phone)) {
-            //2.不符合，返回错误
             return Result.fail("手机号格式错误");
         }
-        //3.校验验证码
+        //校验验证码
         String cacheCode = stringRedisTemplate.opsForValue().get(RedisConstants.LOGIN_CODE_KEY+phone);
         if(cacheCode==null||!cacheCode.equals(code)){
            return Result.fail("验证码不一致，请重新输入");
        }
 
-        //4.一致，根据手机号查询用户
+        //一致，根据手机号查询用户
         User user = query().eq("phone",phone).one();
 
-        //5.判断用户是否存在
-
-        //6.不存在，创建新用户，保存到数据库
         if(user==null){
            user=createUserWithPhone(phone);
         }
-        //7.存在 保存到redis
-        //7.1 生成个token作为登陆令牌
+
         String token = UUID.randomUUID().toString(true);
 
-        //7.2 将user对象转为Hash存储
+        //将user对象转为Hash存储
         UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+        //将user转为map，其中map配置忽略值为null的字段且转为字符串
         Map<String, Object> map = BeanUtil.beanToMap(userDTO, new HashMap<>(),
-                CopyOptions.create().setIgnoreNullValue(true)
-                        .setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
-        //7.3 存储
+                CopyOptions.create().setIgnoreNullValue(true).
+                        setFieldValueEditor((fieldName, fieldValue) -> fieldValue.toString()));
+        //存储
         String tokenKey=RedisConstants.LOGIN_USER_KEY+token;
         stringRedisTemplate.opsForHash().putAll(tokenKey,map);
         stringRedisTemplate.expire(tokenKey,30,TimeUnit.MINUTES);
-        //8.返回token
+        //返回token
         return Result.ok(token);
     }
 
@@ -131,6 +127,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         //4.获取今天是这个月的第几天
         int dayOfMonth = now.getDayOfMonth();
         //5.写入redis setbit key offset 1
+        //TODO Bitmap存储签到记录 偏移量
         stringRedisTemplate.opsForValue().setBit(key,dayOfMonth-1,true);
         return Result.ok();
     }
