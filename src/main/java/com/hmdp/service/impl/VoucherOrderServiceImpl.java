@@ -43,8 +43,8 @@ import java.util.concurrent.Executors;
  *  服务实现类
  * </p>
  *
- * @author 虎哥
- * @since 2021-12-22
+ * @author llx
+ * @since 2025-10-20
  */
 @Slf4j
 @Service
@@ -235,7 +235,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         //放入mq
         String jsonStr = JSONUtil.toJsonStr(order);
         try {
-            rabbitTemplate.convertAndSend("X","XA",jsonStr );
+            rabbitTemplate.convertAndSend("X","XA",jsonStr);
         } catch (Exception e) {
             log.error("发送 RabbitMQ 消息失败，订单ID: {}", orderId, e);
             throw new RuntimeException("发送消息失败");
